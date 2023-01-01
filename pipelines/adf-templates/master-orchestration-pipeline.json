@@ -1,0 +1,344 @@
+{
+    "name": "Master_Orchestration_Pipeline",
+    "properties": {
+        "description": "Master pipeline that orchestrates all data ingestion and processing activities",
+        "activities": [
+            {
+                "name": "Salesforce_Ingestion",
+                "type": "ExecutePipeline",
+                "dependsOn": [],
+                "userProperties": [],
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "Salesforce_Ingestion_Pipeline",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "IncrementalDate": "@pipeline().parameters.ProcessingDate"
+                    }
+                }
+            },
+            {
+                "name": "SFMC_Ingestion",
+                "type": "ExecutePipeline",
+                "dependsOn": [],
+                "userProperties": [],
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "SFMC_Ingestion_Pipeline",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "ProcessingDate": "@pipeline().parameters.ProcessingDate"
+                    }
+                }
+            },
+            {
+                "name": "NetSuite_Ingestion",
+                "type": "ExecutePipeline",
+                "dependsOn": [],
+                "userProperties": [],
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "NetSuite_Ingestion_Pipeline",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "ProcessingDate": "@pipeline().parameters.ProcessingDate"
+                    }
+                }
+            },
+            {
+                "name": "Data_Quality_Checks",
+                "type": "ExecutePipeline",
+                "dependsOn": [
+                    {
+                        "activity": "Salesforce_Ingestion",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    },
+                    {
+                        "activity": "SFMC_Ingestion",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    },
+                    {
+                        "activity": "NetSuite_Ingestion",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "Data_Quality_Pipeline",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "ProcessingDate": "@pipeline().parameters.ProcessingDate"
+                    }
+                }
+            },
+            {
+                "name": "Analytics_Processing",
+                "type": "ExecutePipeline",
+                "dependsOn": [
+                    {
+                        "activity": "Data_Quality_Checks",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "Analytics_Processing_Pipeline",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "ProcessingDate": "@pipeline().parameters.ProcessingDate"
+                    }
+                }
+            },
+            {
+                "name": "PowerBI_Refresh",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "Analytics_Processing",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "url": "https://api.powerbi.com/v1.0/myorg/groups/@{pipeline().parameters.PowerBIWorkspaceId}/datasets/@{pipeline().parameters.PowerBIDatasetId}/refreshes",
+                    "method": "POST",
+                    "headers": {
+                        "Authorization": "Bearer @{activity('Get_PowerBI_Token').output.access_token}",
+                        "Content-Type": "application/json"
+                    },
+                    "body": {
+                        "type": "full"
+                    }
+                }
+            },
+            {
+                "name": "Get_PowerBI_Token",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "Analytics_Processing",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": true,
+                    "secureInput": true
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "url": "https://login.microsoftonline.com/@{pipeline().parameters.TenantId}/oauth2/v2.0/token",
+                    "method": "POST",
+                    "headers": {
+                        "Content-Type": "application/x-www-form-urlencoded"
+                    },
+                    "body": "grant_type=client_credentials&client_id=@{pipeline().parameters.ClientId}&client_secret=@{pipeline().parameters.ClientSecret}&scope=https://analysis.windows.net/powerbi/api/.default"
+                }
+            },
+            {
+                "name": "Send_Completion_Notification",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "PowerBI_Refresh",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "url": "@pipeline().parameters.NotificationWebhook",
+                    "method": "POST",
+                    "headers": {
+                        "Content-Type": "application/json"
+                    },
+                    "body": {
+                        "text": "🎉 Daily data processing completed successfully!",
+                        "attachments": [
+                            {
+                                "color": "good",
+                                "fields": [
+                                    {
+                                        "title": "Processing Date",
+                                        "value": "@pipeline().parameters.ProcessingDate",
+                                        "short": true
+                                    },
+                                    {
+                                        "title": "Pipeline Run ID",
+                                        "value": "@pipeline().RunId",
+                                        "short": true
+                                    },
+                                    {
+                                        "title": "Duration",
+                                        "value": "@formatDateTime(utcNow(), 'HH:mm:ss')",
+                                        "short": true
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            },
+            {
+                "name": "Handle_Failure",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "Salesforce_Ingestion",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    },
+                    {
+                        "activity": "SFMC_Ingestion",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    },
+                    {
+                        "activity": "NetSuite_Ingestion",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    },
+                    {
+                        "activity": "Data_Quality_Checks",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    },
+                    {
+                        "activity": "Analytics_Processing",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "url": "@pipeline().parameters.NotificationWebhook",
+                    "method": "POST",
+                    "headers": {
+                        "Content-Type": "application/json"
+                    },
+                    "body": {
+                        "text": "❌ Data processing pipeline failed!",
+                        "attachments": [
+                            {
+                                "color": "danger",
+                                "fields": [
+                                    {
+                                        "title": "Processing Date",
+                                        "value": "@pipeline().parameters.ProcessingDate",
+                                        "short": true
+                                    },
+                                    {
+                                        "title": "Pipeline Run ID",
+                                        "value": "@pipeline().RunId",
+                                        "short": true
+                                    },
+                                    {
+                                        "title": "Error Details",
+                                        "value": "Check Azure Data Factory monitoring for detailed error information",
+                                        "short": false
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }
+        ],
+        "parameters": {
+            "ProcessingDate": {
+                "type": "string",
+                "defaultValue": "@formatDateTime(utcNow(), 'yyyy-MM-dd')"
+            },
+            "PowerBIWorkspaceId": {
+                "type": "string",
+                "defaultValue": "your-workspace-id"
+            },
+            "PowerBIDatasetId": {
+                "type": "string",
+                "defaultValue": "your-dataset-id"
+            },
+            "TenantId": {
+                "type": "string",
+                "defaultValue": "your-tenant-id"
+            },
+            "ClientId": {
+                "type": "string",
+                "defaultValue": "your-client-id"
+            },
+            "ClientSecret": {
+                "type": "string",
+                "defaultValue": "your-client-secret"
+            },
+            "NotificationWebhook": {
+                "type": "string",
+                "defaultValue": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+            }
+        },
+        "variables": {
+            "ErrorMessage": {
+                "type": "String"
+            }
+        },
+        "folder": {
+            "name": "Orchestration"
+        },
+        "annotations": [
+            "Master",
+            "Orchestration",
+            "Daily"
+        ]
+    }
+}

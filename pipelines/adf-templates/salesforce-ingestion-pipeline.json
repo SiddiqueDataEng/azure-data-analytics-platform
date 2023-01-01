@@ -1,0 +1,263 @@
+{
+    "name": "Salesforce_Ingestion_Pipeline",
+    "properties": {
+        "description": "Ingests data from Salesforce CRM into Azure Data Lake",
+        "activities": [
+            {
+                "name": "Copy_Salesforce_Accounts",
+                "type": "Copy",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "SalesforceSource",
+                        "query": "SELECT Id, Name, Type, Industry, AnnualRevenue, NumberOfEmployees, BillingStreet, BillingCity, BillingState, BillingPostalCode, BillingCountry, Phone, Website, CreatedDate, LastModifiedDate, OwnerId, IsDeleted FROM Account WHERE LastModifiedDate >= @{formatDateTime(addDays(utcNow(), -1), 'yyyy-MM-ddTHH:mm:ssZ')}",
+                        "readBehavior": "query"
+                    },
+                    "sink": {
+                        "type": "ParquetSink",
+                        "storeSettings": {
+                            "type": "AzureBlobFSWriteSettings"
+                        },
+                        "formatSettings": {
+                            "type": "ParquetWriteSettings"
+                        }
+                    },
+                    "enableStaging": false,
+                    "translator": {
+                        "type": "TabularTranslator",
+                        "typeConversion": true,
+                        "typeConversionSettings": {
+                            "allowDataTruncation": true,
+                            "treatBooleanAsNumber": false
+                        }
+                    }
+                },
+                "inputs": [
+                    {
+                        "referenceName": "Salesforce_Account",
+                        "type": "DatasetReference"
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "DataLake_Parquet_Salesforce_Account",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "FolderPath": "raw/salesforce/account",
+                            "FileName": "@{concat('account_', formatDateTime(utcNow(), 'yyyyMMdd_HHmmss'), '.parquet')}"
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "Copy_Salesforce_Opportunities",
+                "type": "Copy",
+                "dependsOn": [
+                    {
+                        "activity": "Copy_Salesforce_Accounts",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "SalesforceSource",
+                        "query": "SELECT Id, Name, AccountId, StageName, Amount, Probability, CloseDate, Type, LeadSource, CreatedDate, LastModifiedDate, OwnerId, IsWon, IsClosed FROM Opportunity WHERE LastModifiedDate >= @{formatDateTime(addDays(utcNow(), -1), 'yyyy-MM-ddTHH:mm:ssZ')}",
+                        "readBehavior": "query"
+                    },
+                    "sink": {
+                        "type": "ParquetSink",
+                        "storeSettings": {
+                            "type": "AzureBlobFSWriteSettings"
+                        },
+                        "formatSettings": {
+                            "type": "ParquetWriteSettings"
+                        }
+                    },
+                    "enableStaging": false,
+                    "translator": {
+                        "type": "TabularTranslator",
+                        "typeConversion": true,
+                        "typeConversionSettings": {
+                            "allowDataTruncation": true,
+                            "treatBooleanAsNumber": false
+                        }
+                    }
+                },
+                "inputs": [
+                    {
+                        "referenceName": "Salesforce_Opportunity",
+                        "type": "DatasetReference"
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "DataLake_Parquet_Salesforce_Opportunity",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "FolderPath": "raw/salesforce/opportunity",
+                            "FileName": "@{concat('opportunity_', formatDateTime(utcNow(), 'yyyyMMdd_HHmmss'), '.parquet')}"
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "Load_to_SQL_Accounts",
+                "type": "Copy",
+                "dependsOn": [
+                    {
+                        "activity": "Copy_Salesforce_Accounts",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "ParquetSource",
+                        "storeSettings": {
+                            "type": "AzureBlobFSReadSettings",
+                            "recursive": true,
+                            "enablePartitionDiscovery": false
+                        }
+                    },
+                    "sink": {
+                        "type": "AzureSqlSink",
+                        "preCopyScript": "DELETE FROM salesforce.Account WHERE Id IN (SELECT DISTINCT Id FROM salesforce.Account WHERE LoadDate >= DATEADD(day, -1, GETUTCDATE()))",
+                        "writeBehavior": "insert",
+                        "sqlWriterUseTableLock": false,
+                        "disableMetricsCollection": false
+                    },
+                    "enableStaging": false,
+                    "translator": {
+                        "type": "TabularTranslator",
+                        "mappings": [
+                            {
+                                "source": {
+                                    "name": "Id",
+                                    "type": "String"
+                                },
+                                "sink": {
+                                    "name": "Id",
+                                    "type": "String"
+                                }
+                            },
+                            {
+                                "source": {
+                                    "name": "Name",
+                                    "type": "String"
+                                },
+                                "sink": {
+                                    "name": "Name",
+                                    "type": "String"
+                                }
+                            }
+                        ],
+                        "typeConversion": true,
+                        "typeConversionSettings": {
+                            "allowDataTruncation": true,
+                            "treatBooleanAsNumber": false
+                        }
+                    }
+                },
+                "inputs": [
+                    {
+                        "referenceName": "DataLake_Parquet_Salesforce_Account",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "FolderPath": "raw/salesforce/account",
+                            "FileName": "*"
+                        }
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "AzureSQL_Salesforce_Account",
+                        "type": "DatasetReference"
+                    }
+                ]
+            },
+            {
+                "name": "Send_Success_Notification",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "Copy_Salesforce_Opportunities",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    },
+                    {
+                        "activity": "Load_to_SQL_Accounts",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+                    "method": "POST",
+                    "headers": {
+                        "Content-Type": "application/json"
+                    },
+                    "body": {
+                        "text": "✅ Salesforce data ingestion completed successfully at @{utcNow()}"
+                    }
+                }
+            }
+        ],
+        "parameters": {
+            "IncrementalDate": {
+                "type": "string",
+                "defaultValue": "@formatDateTime(addDays(utcNow(), -1), 'yyyy-MM-dd')"
+            }
+        },
+        "variables": {
+            "ProcessingDate": {
+                "type": "String",
+                "defaultValue": "@formatDateTime(utcNow(), 'yyyy-MM-dd')"
+            }
+        },
+        "folder": {
+            "name": "Ingestion"
+        },
+        "annotations": [
+            "Salesforce",
+            "CRM",
+            "Incremental"
+        ]
+    }
+}
